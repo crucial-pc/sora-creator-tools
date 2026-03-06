@@ -15,10 +15,20 @@
     const GENS_COUNT_MIN = 1;
     const GENS_COUNT_MAX_DEFAULT = 10;
     const GENS_COUNT_MAX_ULTRA = 40;
-    // Mutable — updated from API via fetchComposerModels()
-    let composerModels = [
-      { value: 'sy_8', label: 'Sora 2' },
-      { value: 'sy_ore', label: 'Sora 2 Pro' },
+    const UV_DRAFTS_DEBUG_KEY = 'SORA_UV_DRAFTS_DEBUG';
+    const UV_DRAFTS_DEBUG_ENABLED = (() => {
+      try {
+        const raw = localStorage.getItem(UV_DRAFTS_DEBUG_KEY);
+        if (raw == null) return false;
+        const normalized = String(raw).trim().toLowerCase();
+        return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+      } catch {
+        return false;
+      }
+    })();
+    const COMPOSER_MODELS = [
+      { value: 'sora2', label: 'Sora 2' },
+      { value: 'sora2pro', label: 'Sora 2 Pro' },
     ];
     let composerModelValues = new Set(composerModels.map((item) => item.value));
 
@@ -37,6 +47,11 @@
     let sentinelInitialized = false;
     let cachedSentinelToken = null;
     let cachedSentinelExpiry = 0;
+
+    function debugLog(...args) {
+      if (!UV_DRAFTS_DEBUG_ENABLED) return;
+      try { console.log(...args); } catch {}
+    }
 
     function getBookmarks() {
       try {
@@ -969,6 +984,7 @@
   let uvDraftsSyncButtonEl = null;
   let uvDraftsMarkAllButtonEl = null;
   let uvDraftsMarkAllStatusEl = null;
+  let uvDraftsMarkAllProgressTimerId = null;
   const UV_DRAFTS_SYNC_PROGRESS_KEY = 'SORA_UV_DRAFTS_SYNC_PROGRESS_V1';
   const UV_DRAFTS_MARK_ALL_PROGRESS_KEY = 'SORA_UV_DRAFTS_MARK_ALL_PROGRESS_V1';
   const UV_DRAFTS_PROGRESS_STALE_MS = 2 * 60 * 60 * 1000;
@@ -1107,7 +1123,29 @@
   }
 
   function updateMarkAllProgressUI() {
-    if (!uvDraftsMarkAllButtonEl || !uvDraftsMarkAllStatusEl) return;
+    const hasUi = !!(uvDraftsMarkAllButtonEl && uvDraftsMarkAllStatusEl);
+    const shouldTick = hasUi && !!(
+      uvDraftsMarkAllState?.active ||
+      uvDraftsReadQueue.length > 0 ||
+      uvDraftsUnsyncedReads.size > 0
+    );
+    if (shouldTick) {
+      if (!uvDraftsMarkAllProgressTimerId) {
+        uvDraftsMarkAllProgressTimerId = setInterval(() => {
+          if (!uvDraftsMarkAllState?.active && uvDraftsReadQueue.length === 0 && uvDraftsUnsyncedReads.size === 0) {
+            clearInterval(uvDraftsMarkAllProgressTimerId);
+            uvDraftsMarkAllProgressTimerId = null;
+            return;
+          }
+          updateMarkAllProgressUI();
+        }, 500);
+      }
+    } else if (uvDraftsMarkAllProgressTimerId) {
+      clearInterval(uvDraftsMarkAllProgressTimerId);
+      uvDraftsMarkAllProgressTimerId = null;
+    }
+
+    if (!hasUi) return;
     if (uvDraftsMarkAllState?.active) {
       const total = Number.isFinite(Number(uvDraftsMarkAllState.total))
         ? Math.max(0, Math.floor(Number(uvDraftsMarkAllState.total)))
@@ -3351,7 +3389,33 @@
   function applyDraftFilters(drafts) {
     let filtered = [...drafts];
     const bookmarks = getBookmarks();
+    const skipSort = !!options?.skipSort;
 
+    // Optional diagnostics for bookmark mismatch investigation.
+    const _bmIds = [...bookmarks];
+    const _draftIds = new Set(filtered.map(d => d?.id).filter(Boolean));
+    const _bmInData = _bmIds.filter(id => _draftIds.has(id));
+    const _bmMissing = _bmIds.filter(id => !_draftIds.has(id));
+    const _bmUnsynced = _bmIds.filter(id => {
+      const d = filtered.find(x => x?.id === id);
+      return d?.is_unsynced === true;
+    });
+    debugLog('[UV Drafts DEBUG] filterState:', uvDraftsFilterState,
+      '| bookmarks in storage:', _bmIds.length,
+      '| drafts in data:', filtered.length,
+      '| found in data:', _bmInData.length,
+      '| missing from data:', _bmMissing.length,
+      '| unsynced:', _bmUnsynced.length);
+    if (_bmIds.length > 0) {
+      debugLog('[UV Drafts DEBUG] bookmark IDs:', _bmIds);
+    }
+    if (_bmMissing.length > 0) {
+      debugLog('[UV Drafts DEBUG] missing IDs:', _bmMissing);
+    }
+    // Also log raw localStorage value for format check
+    debugLog('[UV Drafts DEBUG] raw localStorage:', localStorage.getItem(BOOKMARKS_KEY));
+
+    // Apply search filter
     if (uvDraftsSearchQuery) {
       const parsed = parseSearchTerms(uvDraftsSearchQuery);
       if (uvDraftsLogic && typeof uvDraftsLogic.draftMatchesSearchQuery === 'function') {
@@ -5011,8 +5075,6 @@
     uvDraftsMarkAllButtonEl = markAllReadBtn;
     uvDraftsMarkAllStatusEl = syncStatusEl;
 
-    // Keep status responsive while queues update.
-    setInterval(updateMarkAllProgressUI, 200);
     updateMarkAllProgressUI();
 
     markAllReadBtn.addEventListener('click', async () => {
@@ -5196,6 +5258,10 @@
       uvDraftsUnsyncedReads.size > 0;
     if (!hasActiveProgress) {
       uvDraftsInitRunId++;
+    }
+    if (uvDraftsMarkAllProgressTimerId) {
+      clearInterval(uvDraftsMarkAllProgressTimerId);
+      uvDraftsMarkAllProgressTimerId = null;
     }
     stopPendingDraftsPolling(false);
     if (!hasActiveProgress) {
