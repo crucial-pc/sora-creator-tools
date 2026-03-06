@@ -87,6 +87,219 @@
     return next;
   }
 
+  function extractRemixTargetPostId(apiDraft, existingData = {}) {
+    const candidates = [
+      apiDraft?.creation_config?.remix_target_post?.post?.id,
+      apiDraft?.creation_config?.remix_target_post?.id,
+      apiDraft?.remix_target_post_id,
+      existingData?.remix_target_post_id,
+    ];
+    for (const candidate of candidates) {
+      const value = typeof candidate === 'string' ? candidate.trim() : '';
+      if (value) return value;
+    }
+    return null;
+  }
+
+  function extractPublishedPostGenerationId(post) {
+    const candidates = [
+      post?.generation_id,
+      post?.draft_id,
+    ];
+    const attachments = Array.isArray(post?.attachments) ? post.attachments : [];
+    for (const attachment of attachments) {
+      candidates.push(
+        attachment?.generation_id,
+        attachment?.draft_id,
+        attachment?.draft?.id,
+        attachment?.generation?.id,
+        attachment?.source_id,
+        attachment?.core_id,
+        attachment?.id
+      );
+    }
+    for (const candidate of candidates) {
+      const value = typeof candidate === 'string' ? candidate.trim() : '';
+      if (/^gen_/i.test(value)) return value;
+    }
+    return '';
+  }
+
+  function extractPublishedPostVideoUrl(post) {
+    const attachments = Array.isArray(post?.attachments) ? post.attachments : [];
+    const candidates = [
+      post?.url,
+      post?.video_url,
+      post?.media?.url,
+      Array.isArray(post?.assets) ? post.assets[0]?.url : '',
+    ];
+    for (const attachment of attachments) {
+      candidates.push(
+        attachment?.url,
+        attachment?.video_url,
+        attachment?.draft?.url,
+        attachment?.post?.url,
+        attachment?.media?.url,
+        attachment?.encodings?.source?.path,
+        attachment?.encodings?.source_wm?.path,
+        attachment?.encodings?.md?.path
+      );
+    }
+    for (const candidate of candidates) {
+      const value = typeof candidate === 'string' ? candidate.trim() : '';
+      if (value) return value;
+    }
+    return '';
+  }
+
+  function extractPublishedPostThumbnailUrl(post) {
+    const attachments = Array.isArray(post?.attachments) ? post.attachments : [];
+    const candidates = [
+      post?.preview_image_url,
+      post?.thumbnail_url,
+      post?.thumb,
+      post?.cover,
+      post?.poster?.url,
+      post?.image?.url,
+      Array.isArray(post?.images) ? post.images[0]?.url : '',
+      Array.isArray(post?.assets) ? (post.assets[0]?.thumbnail_url || post.assets[0]?.url) : '',
+      post?.media?.thumbnail,
+      post?.media?.cover,
+      post?.media?.poster,
+    ];
+    for (const attachment of attachments) {
+      candidates.push(
+        attachment?.thumbnail_url,
+        attachment?.thumb,
+        attachment?.cover,
+        attachment?.poster?.url,
+        attachment?.image?.url,
+        attachment?.encodings?.thumbnail?.path
+      );
+    }
+    for (const candidate of candidates) {
+      const value = typeof candidate === 'string' ? candidate.trim() : '';
+      if (value) return value;
+    }
+    return '';
+  }
+
+  function extractPublishedPostDurationSeconds(post) {
+    const directDuration = Number(post?.duration_s);
+    if (Number.isFinite(directDuration) && directDuration > 0) return directDuration;
+    const attachments = Array.isArray(post?.attachments) ? post.attachments : [];
+    for (const attachment of attachments) {
+      const attDuration = Number(attachment?.duration_s);
+      if (Number.isFinite(attDuration) && attDuration > 0) return attDuration;
+      const attFrames = Number(attachment?.n_frames);
+      if (Number.isFinite(attFrames) && attFrames > 0) return attFrames / 30;
+    }
+    const directFrames = Number(post?.n_frames || post?.video_metadata?.n_frames);
+    if (Number.isFinite(directFrames) && directFrames > 0) return directFrames / 30;
+    return 0;
+  }
+
+  function extractPublishedPostDimensions(post) {
+    const attachments = Array.isArray(post?.attachments) ? post.attachments : [];
+    const widthCandidates = [post?.width, post?.video_metadata?.width];
+    const heightCandidates = [post?.height, post?.video_metadata?.height];
+    for (const attachment of attachments) {
+      widthCandidates.push(attachment?.width);
+      heightCandidates.push(attachment?.height);
+    }
+    const width = widthCandidates.map(Number).find((value) => Number.isFinite(value) && value > 0) || 0;
+    const height = heightCandidates.map(Number).find((value) => Number.isFinite(value) && value > 0) || 0;
+    return { width, height };
+  }
+
+  function buildComposerSourceFromPublishedPost(post, fallbackPostId = '') {
+    const publishedPost = post && typeof post === 'object' ? post : {};
+    const postId = String(publishedPost.id || fallbackPostId || '').trim();
+    const generationId = extractPublishedPostGenerationId(publishedPost);
+    const prompt = String(publishedPost.text || publishedPost.post_text || '').trim();
+    const title = String(publishedPost.title || '').trim();
+    const url = extractPublishedPostVideoUrl(publishedPost);
+    const thumbnailUrl = extractPublishedPostThumbnailUrl(publishedPost);
+    const durationSeconds = extractPublishedPostDurationSeconds(publishedPost);
+    const { width, height } = extractPublishedPostDimensions(publishedPost);
+    const orientation = width > 0 && height > 0 ? (width > height ? 'landscape' : 'portrait') : '';
+    if (!postId && !url) return null;
+    return {
+      type: 'post',
+      id: generationId,
+      post_id: postId,
+      storyboard_id: '',
+      can_storyboard: false,
+      prompt,
+      title,
+      url,
+      preview_url: url,
+      thumbnail_url: thumbnailUrl,
+      orientation,
+      duration_seconds: durationSeconds,
+      cameo_profiles: [],
+      label: `${title || prompt || postId || 'Published video'}`.slice(0, 90),
+    };
+  }
+
+  function isLargeComposerSizeAllowed(modelValue, ultraModeEnabled = false) {
+    if (ultraModeEnabled) return true;
+    return getComposerModelFamily(modelValue) === 'sy_ore';
+  }
+
+  function normalizeComposerSizeForModel(sizeValue, modelValue, ultraModeEnabled = false) {
+    const normalizedSize = sizeValue === 'large' ? 'large' : 'small';
+    if (normalizedSize === 'large' && !isLargeComposerSizeAllowed(modelValue, ultraModeEnabled)) {
+      return 'small';
+    }
+    return normalizedSize;
+  }
+
+  function isGenerationDraftId(value) {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    return /^gen_/i.test(normalized);
+  }
+
+  function extractErrorMessage(value, fallback = 'Unknown error') {
+    if (value == null) return fallback;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed || fallback;
+    }
+    if (value instanceof Error) {
+      const message = typeof value.message === 'string' ? value.message.trim() : '';
+      return message || fallback;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const message = extractErrorMessage(item, '');
+        if (message) return message;
+      }
+      return fallback;
+    }
+    if (typeof value === 'object') {
+      const candidates = [
+        value.message,
+        value.user_error_message,
+        value.error,
+        value.detail,
+        value.failure_reason,
+        value.reason,
+        value.title,
+        value.errors,
+      ];
+      for (const candidate of candidates) {
+        const message = extractErrorMessage(candidate, '');
+        if (message) return message;
+      }
+      try {
+        const serialized = JSON.stringify(value);
+        return serialized && serialized !== '{}' ? serialized : fallback;
+      } catch {}
+    }
+    return fallback;
+  }
+
   function createSoraUVDraftsPageModule(deps = {}) {
     let capturedAuthToken = null;
     let modelOverride = null;
@@ -813,8 +1026,8 @@
       apiDraft.reason ??
       existingData.violation_reason ??
       null;
-    const thumbnailUrl = apiDraft.encodings?.thumbnail?.path || existingData.thumbnail_url || '';
-    const previewUrl = apiDraft.encodings?.md?.path || apiDraft.url || existingData.preview_url || '';
+    const thumbnailUrl = apiDraft.encodings?.thumbnail?.path || apiDraft.thumbnail_url || existingData.thumbnail_url || '';
+    const previewUrl = apiDraft.encodings?.md?.path || apiDraft.video_url || apiDraft.url || existingData.preview_url || '';
     const noDate = isNoDateDraft({
       ...existingData,
       ...apiDraft,
@@ -857,7 +1070,7 @@
     }
 
     return {
-      id: apiDraft.id,
+      id: apiDraft.id || apiDraft.generation_id,
       kind,
       prompt: apiDraft.prompt || '',
       title: apiDraft.title || '',
@@ -870,11 +1083,12 @@
       thumbnail_url: thumbnailUrl,
       preview_url: previewUrl,
       gif_url: apiDraft.encodings?.gif?.path || '',
-      download_url: apiDraft.downloadable_url || apiDraft.download_urls?.no_watermark || existingData.download_url || '',
+      download_url: apiDraft.downloadable_url || apiDraft.download_urls?.no_watermark || apiDraft.video_url || apiDraft.url || existingData.download_url || '',
       can_remix: apiDraft.can_remix ?? true,
       can_storyboard: apiDraft.can_storyboard ?? true,
       storyboard_id: apiDraft.storyboard_id || apiDraft.creation_config?.storyboard_id || '',
-      remix_target_post_id: apiDraft.creation_config?.remix_target_post?.id || null,
+      remix_target_draft_id: apiDraft.creation_config?.remix_target_id || existingData.remix_target_draft_id || null,
+      remix_target_post_id: extractRemixTargetPostId(apiDraft, existingData),
       post_visibility: apiDraft.post_visibility || null,
       post_id: post?.id || existingData.post_id || null,
       post_permalink: post?.permalink || existingData.post_permalink || null,
@@ -1473,9 +1687,7 @@
     if (raw.orientation === 'portrait' || raw.orientation === 'landscape') {
       out.orientation = raw.orientation;
     }
-    if (raw.size === 'small' || raw.size === 'large') {
-      out.size = raw.size;
-    }
+    out.size = normalizeComposerSizeForModel(raw.size, out.model, loadUltraModeEnabledFromStorage());
     if (typeof raw.style_id === 'string') out.style_id = raw.style_id;
     return out;
   }
@@ -1554,6 +1766,14 @@
     takeString('orientation');
     takeString('size');
     takeString('style_id');
+    if (normalized.size) {
+      const effectiveModel = normalizeComposerModel(normalized.model) || getDefaultComposerModel();
+      normalized.size = normalizeComposerSizeForModel(
+        normalized.size,
+        effectiveModel,
+        loadUltraModeEnabledFromStorage()
+      );
+    }
     if (!Object.keys(normalized).length) return bodyString;
 
     const applyOverrides = (obj) => {
@@ -2321,11 +2541,91 @@
     };
   }
 
+  async function fetchPublishedPostById(postId) {
+    const id = typeof postId === 'string' ? postId.trim() : '';
+    if (!id) return null;
+    if (!capturedAuthToken) throw new Error('Browse Sora first so published source lookup can authenticate.');
+    const headers = { accept: '*/*', Authorization: capturedAuthToken };
+    const res = await fetch(`https://sora.chatgpt.com/backend/project_y/post/${encodeURIComponent(id)}`, {
+      credentials: 'include',
+      headers,
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const detail = extractErrorMessage(json, `HTTP ${res.status}`);
+      throw new Error(`Published source lookup failed: ${detail}`);
+    }
+    return extractPublishedPost(json);
+  }
+
+  async function fetchDraftDetailById(draftId) {
+    const id = typeof draftId === 'string' ? draftId.trim() : '';
+    if (!id) return null;
+    if (!capturedAuthToken) throw new Error('Browse Sora first so draft source lookup can authenticate.');
+    const headers = { accept: '*/*', Authorization: capturedAuthToken };
+    const res = await fetch(`https://sora.chatgpt.com/backend/project_y/profile/drafts/${encodeURIComponent(id)}`, {
+      credentials: 'include',
+      headers,
+    });
+    const json = await res.json().catch(() => null);
+    if (!res.ok) {
+      const detail = extractErrorMessage(json, `HTTP ${res.status}`);
+      throw new Error(`Draft source lookup failed: ${detail}`);
+    }
+    if (json && typeof json === 'object') {
+      return json.draft || json.item?.draft || json.item || json.data?.draft || json.data || json;
+    }
+    return null;
+  }
+
+  async function resolveRetryComposerSource(draft) {
+    const parentDraftId = typeof draft?.remix_target_draft_id === 'string'
+      ? draft.remix_target_draft_id.trim()
+      : '';
+    if (parentDraftId) {
+      const inMemoryParent = [...(uvDraftsData || []), ...(uvDraftsPendingData || [])]
+        .find((item) => String(item?.id || '').trim() === parentDraftId);
+      if (inMemoryParent) return buildComposerSourceFromDraft(inMemoryParent);
+
+      try {
+        const storedParent = await uvDBGet(UV_DRAFTS_STORES.drafts, parentDraftId);
+        if (storedParent) return buildComposerSourceFromDraft(storedParent);
+      } catch {}
+    }
+
+    const parentPostId = typeof draft?.remix_target_post_id === 'string'
+      ? draft.remix_target_post_id.trim()
+      : '';
+    if (!parentPostId) return null;
+    if (isGenerationDraftId(parentPostId)) {
+      const existingDraft = [...(uvDraftsData || []), ...(uvDraftsPendingData || [])]
+        .find((item) => String(item?.id || '').trim() === parentPostId);
+      const existingStoredDraft = existingDraft || await uvDBGet(UV_DRAFTS_STORES.drafts, parentPostId).catch(() => null);
+      if (existingStoredDraft) return buildComposerSourceFromDraft(existingStoredDraft);
+
+      const fetchedDraft = await fetchDraftDetailById(parentPostId);
+      const transformedDraft = transformDraftForStorage(fetchedDraft || {}, fetchedDraft || {});
+      if (transformedDraft?.id) {
+        try {
+          await uvDBPut(UV_DRAFTS_STORES.drafts, transformedDraft);
+        } catch {}
+      }
+      return buildComposerSourceFromDraft(transformedDraft);
+    }
+    const post = await fetchPublishedPostById(parentPostId);
+    const source = buildComposerSourceFromPublishedPost(post, parentPostId);
+    if (!source?.id) {
+      throw new Error('Published source did not expose a remix target.');
+    }
+    return source;
+  }
+
   function getComposerSourceHint(source) {
     if (!source || typeof source !== 'object') return '';
     if (source.type === 'url' && source.url) return `Source URL: ${source.url}`;
     if (source.type === 'file' && source.fileName) return `Local file: ${source.fileName}`;
     if (source.type === 'draft' && source.id) return `Source draft: ${source.id}`;
+    if (source.type === 'post' && source.post_id) return `Source post: ${source.post_id}`;
     if (source.url) return `Source: ${source.url}`;
     return '';
   }
@@ -2345,6 +2645,7 @@
     const normalized = {
       type: String(source.type || '').trim().toLowerCase(),
       id: String(source.id || '').trim(),
+      post_id: String(source.post_id || '').trim(),
       storyboard_id: String(source.storyboard_id || '').trim(),
       can_storyboard: source.can_storyboard !== false,
       prompt: String(source.prompt || '').trim(),
@@ -2361,11 +2662,13 @@
     };
 
     const hasDraftIdentity = !!(normalized.id || normalized.storyboard_id);
+    const hasPostIdentity = !!normalized.post_id;
     const hasPlayableMedia = !!(normalized.url || normalized.preview_url || normalized.object_url);
     const hasFileIdentity = !!(normalized.fileName || normalized.object_url);
 
     let valid = false;
     if (normalized.type === 'draft') valid = hasDraftIdentity || hasPlayableMedia;
+    else if (normalized.type === 'post') valid = hasPostIdentity || hasPlayableMedia;
     else if (normalized.type === 'url') {
       try {
         const parsed = new URL(normalized.url);
@@ -2381,6 +2684,7 @@
         normalized.title ||
         normalized.prompt ||
         normalized.fileName ||
+        normalized.post_id ||
         normalized.id ||
         normalized.url ||
         'Source video'
@@ -2440,6 +2744,7 @@
         } else {
           const subtitleParts = [];
           if (nextSource.type === 'draft' && nextSource.id) subtitleParts.push(`Draft ${nextSource.id}`);
+          if (nextSource.type === 'post' && nextSource.post_id) subtitleParts.push(`Post ${nextSource.post_id}`);
           if (nextSource.type === 'url') subtitleParts.push('URL source');
           if (nextSource.type === 'file') subtitleParts.push('Local file');
           if (Number(nextSource.duration_seconds) > 0) {
@@ -2685,7 +2990,7 @@
     });
     const json = await res.json().catch(() => null);
     if (!res.ok) {
-      const detail = json?.error || json?.detail || json?.message || `HTTP ${res.status}`;
+      const detail = extractErrorMessage(json, `HTTP ${res.status}`);
       throw new Error(detail);
     }
     return extractPublishedPost(json);
@@ -2773,6 +3078,7 @@
       persistUVDraftsComposerState();
     }
     if (sel.value) modelOverride = sel.value;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   function refreshComposerStyleSelect() {
@@ -2936,12 +3242,13 @@
 
     // Build the /nf/create request body
     const nFrames = SECONDS_TO_FRAMES[state.durationSeconds] || 300;
+    const remixTargetId = String(source?.id || '').trim();
     const body = {
       kind: 'video',
       prompt: prompt || source?.prompt || source?.title || '',
       model: normalizeComposerModel(state.model) || composerModels[0]?.value || 'sy_8',
       orientation: state.orientation || 'portrait',
-      size: state.size || 'small',
+      size: normalizeComposerSizeForModel(state.size, state.model, loadUltraModeEnabledFromStorage()),
       n_frames: nFrames,
     };
 
@@ -2955,20 +3262,27 @@
     }
 
     // Remix
-    if (mode === 'remix' && source?.id) {
-      body.remix_target_id = source.id;
+    if (mode === 'remix') {
+      if (!remixTargetId) {
+        setStatus('Source video could not be prepared for remix.', 'error');
+        return;
+      }
+      body.remix_target_id = remixTargetId;
     }
 
     // Extend (storyboard)
     if (mode === 'extend') {
       if (source?.storyboard_id) {
         body.storyboard_id = source.storyboard_id;
-      } else if (source?.id) {
+      } else if (remixTargetId) {
         // Fallback: use remix with extend-style prompt
-        body.remix_target_id = source.id;
+        body.remix_target_id = remixTargetId;
         if (!prompt) {
           body.prompt = 'Extend this video seamlessly with matching style, motion, and framing.';
         }
+      } else {
+        setStatus('Source video could not be prepared for extend.', 'error');
+        return;
       }
     }
 
@@ -3023,8 +3337,8 @@
           taskIds.push(r.value.id);
         } else {
           const errMsg = r.status === 'rejected'
-            ? r.reason?.message || 'Request failed'
-            : r.value?.error || r.value?.detail || 'Unknown error';
+            ? extractErrorMessage(r.reason, 'Request failed')
+            : extractErrorMessage(r.value, 'Unknown error');
           errors.push(errMsg);
         }
       }
@@ -3046,7 +3360,7 @@
         setStatus('All generations failed: ' + (errors[0] || 'Unknown error'), 'error');
       }
     } catch (err) {
-      setStatus('Error: ' + (err.message || 'Generation failed'), 'error');
+      setStatus('Error: ' + extractErrorMessage(err, 'Generation failed'), 'error');
     }
   }
 
@@ -3179,7 +3493,21 @@
       gensEl.value = String(clampGensCount(gensEl.value || uvDraftsComposerState.gensCount));
     };
 
+    const syncComposerSizeField = () => {
+      if (!sizeEl || !modelEl) return;
+      const ultraModeEnabled = loadUltraModeEnabledFromStorage();
+      const allowLarge = isLargeComposerSizeAllowed(modelEl.value, ultraModeEnabled);
+      const normalizedSize = normalizeComposerSizeForModel(
+        sizeEl.value || uvDraftsComposerState?.size,
+        modelEl.value || uvDraftsComposerState?.model,
+        ultraModeEnabled
+      );
+      if (sizeEl.value !== normalizedSize) sizeEl.value = normalizedSize;
+      sizeEl.disabled = !allowLarge;
+    };
+
     const syncStateFromFields = () => {
+      syncComposerSizeField();
       uvDraftsComposerState = normalizeUVDraftsComposerState({
         prompt: promptEl.value,
         model: modelEl.value,
@@ -3192,6 +3520,7 @@
       persistUVDraftsComposerState();
       persistComposerGensCount(uvDraftsComposerState.gensCount);
       if (gensEl) gensEl.value = String(uvDraftsComposerState.gensCount);
+      if (sizeEl) sizeEl.value = uvDraftsComposerState.size;
     };
 
     promptEl.value = uvDraftsComposerState.prompt;
@@ -3205,6 +3534,8 @@
     sizeEl.value = uvDraftsComposerState.size;
     styleEl.value = uvDraftsComposerState.style_id;
     syncGensFieldLimits();
+    syncComposerSizeField();
+    uvDraftsComposerState.size = sizeEl.value;
     persistUVDraftsComposerState();
     persistComposerGensCount(uvDraftsComposerState.gensCount);
 
@@ -3212,9 +3543,15 @@
       el.addEventListener('input', syncStateFromFields);
       el.addEventListener('change', syncStateFromFields);
     });
-    window.addEventListener('sct_ultra_mode', syncGensFieldLimits);
+    window.addEventListener('sct_ultra_mode', () => {
+      syncGensFieldLimits();
+      syncStateFromFields();
+    });
     window.addEventListener('storage', (event) => {
-      if (event.key === ULTRA_MODE_KEY) syncGensFieldLimits();
+      if (event.key === ULTRA_MODE_KEY) {
+        syncGensFieldLimits();
+        syncStateFromFields();
+      }
     });
 
     composer.querySelector('[data-uvd-compose-create="1"]')?.addEventListener('click', () => startComposerFlow('compose', statusEl));
@@ -4262,11 +4599,20 @@
     copyBtn.disabled = !String(draft.prompt || '').trim();
     actionsRow.appendChild(copyBtn);
 
-    const retryBtn = createActionBtn(icons.retry, 'Retry (copy prompt to composer)', () => {
+    const retryBtn = createActionBtn(icons.retry, 'Retry (copy prompt to composer)', async () => {
       const prompt = String(draft.prompt || '').trim();
       if (!prompt) return;
 
-      const source = buildComposerSourceFromDraft(draft);
+      const isRemixDraft = !!String(draft?.remix_target_draft_id || draft?.remix_target_post_id || '').trim();
+      let source = null;
+      let sourceError = '';
+      if (isRemixDraft) {
+        try {
+          source = await resolveRetryComposerSource(draft);
+        } catch (err) {
+          sourceError = err?.message || 'Parent source was not found.';
+        }
+      }
       setComposerSource(source);
 
       const promptField = uvDraftsComposerEl?.querySelector('[data-uvd-compose-prompt="1"]');
@@ -4286,8 +4632,18 @@
 
       const statusEl = uvDraftsComposerEl?.querySelector('[data-uvd-compose-status="1"]');
       if (statusEl) {
-        statusEl.textContent = 'Retry ready in composer.';
-        statusEl.dataset.tone = 'ok';
+        if (isRemixDraft && source) {
+          statusEl.textContent = 'Retry ready in composer. Parent source loaded.';
+          statusEl.dataset.tone = 'ok';
+        } else if (isRemixDraft) {
+          statusEl.textContent = sourceError
+            ? `Retry ready in composer. ${sourceError}`
+            : 'Retry ready in composer. Parent source was not found.';
+          statusEl.dataset.tone = 'error';
+        } else {
+          statusEl.textContent = 'Retry ready in composer.';
+          statusEl.dataset.tone = 'ok';
+        }
       }
       flashIconSuccess(retryBtn, icons.retry);
     });
@@ -5590,6 +5946,13 @@
       buildPublicPostPayload,
       extractPublishedPost,
       applyPublishedPostToDraftData,
+      extractRemixTargetPostId,
+      extractPublishedPostGenerationId,
+      buildComposerSourceFromPublishedPost,
+      isLargeComposerSizeAllowed,
+      normalizeComposerSizeForModel,
+      isGenerationDraftId,
+      extractErrorMessage,
     };
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window);
