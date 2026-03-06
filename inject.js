@@ -58,6 +58,7 @@
   const MIN_PER_D = 1440;
   const MIN_PER_Y = 525600;
   const HOT_FLAME_MAX_AGE_MIN = 24 * MIN_PER_H; // 4/5 flames only apply within first 24h
+  const ANALYZE_EXPIRES_WINDOW_MIN = 24 * MIN_PER_H; // Expires column always counts down to 24h post age
 
   // Debug toggle for characters
   DEBUG.characters = false;
@@ -342,6 +343,14 @@
     const mTotal = Math.max(0, Math.floor(ageMin));
     if (mTotal <= 1) return 'Just now';
     return fmtAgeMin(ageMin);
+  }
+
+  function fmtHoursMinutesRemaining(ageMin) {
+    if (!Number.isFinite(ageMin)) return '—';
+    const totalMin = Math.max(0, Math.floor(ageMin));
+    const h = Math.floor(totalMin / MIN_PER_H);
+    const m = totalMin % MIN_PER_H;
+    return `${h}h ${m}m`;
   }
 
   function fmtRefreshCountdown(ms) {
@@ -1538,16 +1547,32 @@
     if (state.isHot) return colorForAgeMin(ageMin);
     return null;
   }
-  function badgeEmojiFor(id, meta) {
+function badgeEmojiFor(id, meta) {
     if (!meta) return '';
     const ageMin = meta.ageMin;
     const likes = idToLikes.get(id) ?? 0;
     const state = badgeStateFor(likes, ageMin);
     if (state.isSuperHot) return '🔥🔥🔥🔥🔥';
     if (state.isVeryHot) return '🔥🔥🔥🔥';
-    if (state.isNearDay) return '📝';
     if (state.isHot) return fireForAge(ageMin);
     return '';
+  }
+
+  function likesPerMinute(likes, ageMin) {
+    const likesNum = Number(likes);
+    const ageNum = Number(ageMin);
+    if (!Number.isFinite(likesNum) || likesNum < 0) return null;
+    if (!Number.isFinite(ageNum) || ageNum < 0) return null;
+    // Avoid division-by-zero at post creation time; treat first minute as 1m.
+    return likesNum / Math.max(ageNum, 1);
+  }
+
+  function viewsPerMinute(views, ageMin) {
+    const viewsNum = Number(views);
+    const ageNum = Number(ageMin);
+    if (!Number.isFinite(viewsNum) || viewsNum < 0) return null;
+    if (!Number.isFinite(ageNum) || ageNum < 0) return null;
+    return viewsNum / Math.max(ageNum, 1);
   }
 
   function formatPostedAtLocal(tsMs) {
@@ -1611,8 +1636,7 @@
 
     // Normalize IR/RR displays
     const irDisp = irRaw ? (parseFloat(irRaw) === 0 ? '0%' : irRaw) : null;
-    const rrDisp =
-      rrRaw == null ? null : +rrRaw === 0 ? '0%' : (rrRaw.endsWith('.00') ? rrRaw.slice(0, -3) : rrRaw) + '%';
+    const rrDisp = rrRaw == null ? null : +rrRaw === 0 ? '0%' : `${Number(rrRaw).toFixed(1)}%`;
 
     // Impact Score
     let impactStr = null;
@@ -1629,14 +1653,24 @@
     const irStr = irDisp ? `${irDisp} IR` : null;
     const rrStr = rrDisp ? `${rrDisp} RR` : null;
     const ageStr = Number.isFinite(ageMin) ? fmtAgeMinPill(ageMin) : null;
-    const emojiStr = badgeEmojiFor(id, meta);
-    const timeEmojiStr = (ageStr || emojiStr) ? [ageStr || '', emojiStr || ''].filter(Boolean).join(' ') : null;
+    const flamesStr = badgeEmojiFor(id, meta);
+    const timeEmojiStr = ageStr || null;
+    const lpmVal = likesPerMinute(likes, ageMin);
+    const vpmVal = viewsPerMinute(totalViews, ageMin);
+    const rateBaseStr = Number.isFinite(vpmVal) ? `${vpmVal.toFixed(1)} VPM` : null;
+    const rateStr = rateBaseStr ? (flamesStr ? `${rateBaseStr} ${flamesStr}` : rateBaseStr) : null;
+    const lpmTip = rateBaseStr
+      ? [
+          Number.isFinite(vpmVal) ? `${vpmVal.toFixed(2)} views/minute` : null,
+          `${lpmVal.toFixed(2)} likes/minute`
+        ].filter(Boolean).join(' and ')
+      : null;
 
     const bg = badgeBgFor(id, meta);
     badge.style.background = 'transparent';
     const pillBg = bg || 'rgba(37,37,37,0.7)';
 
-    const newKey = JSON.stringify([durationStr, viewsStr, irStr, rrStr, impactStr, timeEmojiStr, pillBg]);
+    const newKey = JSON.stringify([durationStr, viewsStr, irStr, rrStr, impactStr, timeEmojiStr, rateStr, pillBg]);
     if (badge.dataset.key === newKey) {
       badge.style.boxShadow = 'none';
       return;
@@ -1666,11 +1700,6 @@
       const tipFinal = tip || (nearDay ? 'This gen was posted at this time of day!' : null);
       const el = createPill(badge, timeEmojiStr, tipFinal, !!tipFinal);
       el.style.background = pillBg;
-      if (isSuperHot) {
-        el.style.boxShadow = '0 0 10px 3px hsla(0, 100%, 50%, 0.7)';
-      } else if (isVeryHot) {
-        el.style.boxShadow = '0 0 8px 2px hsla(0, 100%, 50%, 0.5)';
-      }
     }
     if (durationStr) {
       const dims = idToDimensions.get(id);
@@ -1691,7 +1720,16 @@
       const el = createPill(badge, `${durationStr}`, tooltip, true);
       el.style.background = pillBg;
     }
-  } 
+    if (rateStr) {
+      const el = createPill(badge, rateStr, lpmTip, true);
+      el.style.background = pillBg;
+      if (isSuperHot) {
+        el.style.boxShadow = '0 0 10px 3px hsla(0, 100%, 50%, 0.7)';
+      } else if (isVeryHot) {
+        el.style.boxShadow = '0 0 8px 2px hsla(0, 100%, 50%, 0.5)';
+      }
+    }
+  }
 
   function renderBadges() {
     ensureControlBar();
@@ -2295,7 +2333,7 @@
     const irRaw = commentsVal == null ? null : interactionRate(likes, comments, uv);
     const rrRaw = remixRate(likes, remixes);
     const irDisp = irRaw ? (parseFloat(irRaw) === 0 ? '0%' : irRaw) : null;
-    const rrDisp = rrRaw == null ? null : +rrRaw === 0 ? '0%' : (rrRaw.endsWith('.00') ? rrRaw.slice(0, -3) : rrRaw) + '%';
+    const rrDisp = rrRaw == null ? null : +rrRaw === 0 ? '0%' : `${Number(rrRaw).toFixed(1)}%`;
     
     // Impact Score
     let impactStr = null;
@@ -2314,8 +2352,18 @@
     const irStr = irDisp ? `${irDisp} IR` : null;
     const rrStr = rrDisp ? `${rrDisp} RR` : null;
     const ageStr = Number.isFinite(ageMin) ? fmtAgeMinPill(ageMin) : null;
-    const emojiStr = badgeEmojiFor(sid, meta);
-    const timeEmojiStr = (ageStr || emojiStr) ? [ageStr || '', emojiStr || ''].filter(Boolean).join(' ') : null;
+    const flamesStr = badgeEmojiFor(sid, meta);
+    const timeEmojiStr = ageStr || null;
+    const lpmVal = likesPerMinute(likes ?? 0, ageMin);
+    const vpmVal = viewsPerMinute(totalViews, ageMin);
+    const rateBaseStr = Number.isFinite(vpmVal) ? `${vpmVal.toFixed(1)} VPM` : null;
+    const rateStr = rateBaseStr ? (flamesStr ? `${rateBaseStr} ${flamesStr}` : rateBaseStr) : null;
+    const lpmTip = rateBaseStr
+      ? [
+          Number.isFinite(vpmVal) ? `${vpmVal.toFixed(2)} views/minute` : null,
+          `${lpmVal.toFixed(2)} likes/minute`
+        ].filter(Boolean).join(' and ')
+      : null;
 
     // Get duration if available
     let duration = idToDuration.get(sid);
@@ -2343,7 +2391,7 @@
     const durationStr = duration ? formatDuration(duration) : null;
 
     // Determine if we have any data to display
-    if (viewsStr == null && irStr == null && rrStr == null && impactStr == null && timeEmojiStr == null && durationStr == null) {
+    if (viewsStr == null && irStr == null && rrStr == null && impactStr == null && timeEmojiStr == null && durationStr == null && rateStr == null) {
       el.innerHTML = '';
       return;
     }
@@ -2351,7 +2399,7 @@
     // Use a key to prevent unnecessary DOM updates - match feed badge key format
     const bg = badgeBgFor(sid, meta);
     const pillBg = bg || 'rgba(37,37,37,0.7)';
-    const newKey = JSON.stringify([durationStr, viewsStr, irStr, rrStr, impactStr, timeEmojiStr, pillBg]);
+    const newKey = JSON.stringify([durationStr, viewsStr, irStr, rrStr, impactStr, timeEmojiStr, rateStr, pillBg]);
     const hasPills = el.querySelectorAll('.sora-uv-pill').length > 0;
     if (el.dataset.key === newKey && hasPills) return;
     el.dataset.key = newKey;
@@ -2392,12 +2440,6 @@
       const timeEl = createPill(el, timeEmojiStr, tipFinal, !!tipFinal);
       timeEl.style.background = pillBg;
       timeEl.style.pointerEvents = 'auto';
-
-      if (isSuperHot) {
-        timeEl.style.boxShadow = '0 0 10px 3px hsla(0, 100%, 50%, 0.7)';
-      } else if (isVeryHot) {
-        timeEl.style.boxShadow = '0 0 8px 2px hsla(0, 100%, 50%, 0.5)';
-      }
     }
 
     // 5. Duration Pill - moved to end
@@ -2420,6 +2462,19 @@
       const metEl = createPill(el, `${durationStr}`, tooltip, true);
       metEl.style.background = pillBg;
       metEl.style.pointerEvents = 'auto';
+    }
+
+    // 6. LPM Pill - always last
+    if (rateStr) {
+      const lpmEl = createPill(el, rateStr, lpmTip, true);
+      lpmEl.style.background = pillBg;
+      lpmEl.style.pointerEvents = 'auto';
+
+      if (isSuperHot) {
+        lpmEl.style.boxShadow = '0 0 10px 3px hsla(0, 100%, 50%, 0.7)';
+      } else if (isVeryHot) {
+        lpmEl.style.boxShadow = '0 0 8px 2px hsla(0, 100%, 50%, 0.5)';
+      }
     }
 
     // Keep container pointerEvents: none to allow clicks to pass through to video controls, 
@@ -2630,6 +2685,7 @@
 
     const bar = document.createElement('div');
     bar.className = 'sora-uv-controls';
+    const BAR_RIGHT_DEFAULT_PX = 12;
     
     // Helper function to calculate top position based on scroll distance
     // Linear movement: starts at 42px (12px + 30px), moves to 8px over 30px of scroll
@@ -2665,7 +2721,7 @@
     Object.assign(bar.style, {
       position: 'fixed',
       top: getBarTopPosition(), // Start 30px lower (42px), move linearly to 12px
-      right: '12px',
+      right: `${BAR_RIGHT_DEFAULT_PX}px`,
       zIndex: 2147483640, // Lower than max to allow notifications (toasts) to be on top
       display: 'flex',
       gap: '8px',
@@ -2734,6 +2790,7 @@
     // Initial position update and watch for dynamically added buttons
     const tryUpdateFeedButton = () => {
       updateFeedButtonPosition();
+      syncActivityButtonDocking(bar, bar.style.display !== 'none' && !isDrafts());
     };
     
     // Try immediately and after a delay
@@ -2758,6 +2815,14 @@
     };
     window.addEventListener('scroll', handleScroll, { passive: true });
     bar._handleScroll = handleScroll;
+
+    const handleResize = () => {
+      updateBarPosition();
+      updateFeedButtonPosition();
+    };
+    window.addEventListener('resize', handleResize, { passive: true });
+    bar._handleResize = handleResize;
+
     bar._feedButtonTimers = [
       setTimeout(tryUpdateFeedButton, 100),
       setTimeout(tryUpdateFeedButton, 500),
@@ -2769,11 +2834,12 @@
     const buttonRow = document.createElement('div');
     Object.assign(buttonRow.style, {
       display: 'flex',
-      gap: '8px',
+      gap: '6px',
       background: 'transparent',
       justifyContent: 'center',
       alignItems: 'center',
     });
+    bar._buttonRow = buttonRow;
 
     // prefs
     let prefs = getPrefs();
@@ -3226,10 +3292,12 @@
 
       // Update label text; applyFilterLockState will no-op while gathering
       if (typeof bar.updateFilterLabel === 'function') bar.updateFilterLabel();
+      enforceControlButtonTypography(bar);
     };
 
     // Initial label + lock application
     bar.updateFilterLabel();
+    enforceControlButtonTypography(bar);
     
     // Set initial position based on current scroll
     updateBarPosition();
@@ -3243,7 +3311,13 @@
     const bar = controlBar;
     if (!bar) return;
     try {
+      syncActivityButtonDocking(bar, false);
+    } catch {}
+    try {
       if (bar._handleScroll) window.removeEventListener('scroll', bar._handleScroll);
+    } catch {}
+    try {
+      if (bar._handleResize) window.removeEventListener('resize', bar._handleResize);
     } catch {}
     try {
       if (bar._feedButtonObserver) bar._feedButtonObserver.disconnect();
@@ -3256,6 +3330,117 @@
       if (document.contains(bar)) bar.remove();
     } catch {}
     controlBar = null;
+  }
+
+  function findTopRightActivityButton() {
+    const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    const maxTop = Math.min(180, Math.max(100, Math.round(vh * 0.35)));
+    const minLeft = Math.round(vw * 0.45);
+    const candidates = Array.from(document.querySelectorAll('button[aria-label="Activity"]'))
+      .filter((btn) => !(controlBar && controlBar.contains(btn)))
+      .map((btn) => ({ btn, rect: btn.getBoundingClientRect() }))
+      .filter(({ rect }) => (
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.top >= -20 &&
+        rect.top <= maxTop &&
+        rect.left >= minLeft
+      ))
+      .sort((a, b) => (b.rect.right - a.rect.right) || (a.rect.top - b.rect.top));
+    return candidates[0]?.btn || null;
+  }
+
+  function undockActivityButton(bar) {
+    if (!bar) return;
+    const state = bar._activityDockState;
+    if (!state) return;
+    const node = state.node;
+    const parent = state.originalParent;
+    const nextSibling = state.originalNextSibling;
+    if (node && state.nodeMarginLeft != null) node.style.marginLeft = state.nodeMarginLeft;
+    if (node && state.nodeMarginRight != null) node.style.marginRight = state.nodeMarginRight;
+    if (node && parent && parent.isConnected) {
+      if (nextSibling && nextSibling.parentNode === parent) parent.insertBefore(node, nextSibling);
+      else parent.appendChild(node);
+    }
+    if (state.nativeContainer && state.nativeContainer.isConnected) {
+      state.nativeContainer.style.display = state.nativeDisplay || '';
+    }
+    if (bar._activityDockSlot) {
+      bar._activityDockSlot.style.display = 'none';
+    }
+    bar._activityDockState = null;
+  }
+
+  function dockActivityButton(bar) {
+    if (!bar || !bar._buttonRow) return;
+    const existingState = bar._activityDockState;
+    if (existingState?.node && bar._activityDockSlot && bar._activityDockSlot.contains(existingState.node)) {
+      bar._activityDockSlot.style.display = 'flex';
+      return;
+    }
+
+    const activityBtn = findTopRightActivityButton();
+    if (!activityBtn) {
+      undockActivityButton(bar);
+      return;
+    }
+
+    const dockSlot = bar._activityDockSlot || (() => {
+      const slot = document.createElement('div');
+      slot.className = 'sora-uv-activity-dock';
+      Object.assign(slot.style, {
+        display: 'none',
+        alignItems: 'center',
+        marginLeft: '-5px',
+      });
+      bar._buttonRow.appendChild(slot);
+      bar._activityDockSlot = slot;
+      return slot;
+    })();
+
+    const moveNode = activityBtn.closest('.pointer-events-auto') || activityBtn;
+    const nativeContainer = moveNode.closest('.pointer-events-none.fixed') || moveNode.closest('.fixed');
+    if (!moveNode.parentNode) return;
+    const nodeMarginLeft = moveNode.style.marginLeft;
+    const nodeMarginRight = moveNode.style.marginRight;
+    undockActivityButton(bar);
+    bar._activityDockState = {
+      node: moveNode,
+      originalParent: moveNode.parentNode,
+      originalNextSibling: moveNode.nextSibling,
+      nativeContainer,
+      nativeDisplay: nativeContainer ? nativeContainer.style.display : '',
+      nodeMarginLeft,
+      nodeMarginRight,
+    };
+    moveNode.style.marginLeft = '0';
+    moveNode.style.marginRight = '0';
+    dockSlot.appendChild(moveNode);
+    dockSlot.style.display = 'flex';
+    if (nativeContainer) nativeContainer.style.display = 'none';
+  }
+
+  function syncActivityButtonDocking(bar, shouldDock) {
+    if (!bar) return;
+    if (!shouldDock) {
+      undockActivityButton(bar);
+      return;
+    }
+    dockActivityButton(bar);
+  }
+
+  function enforceControlButtonTypography(bar) {
+    if (!bar) return;
+    const selector = '[data-role="filter-btn"], .sora-uv-gather-btn, .sora-uv-analyze-btn, .sora-uv-bookmarks-btn';
+    const btns = bar.querySelectorAll(selector);
+    for (const btn of btns) {
+      btn.style.fontWeight = '500';
+      btn.style.fontSize = '0.875rem';
+      btn.style.letterSpacing = '0.01em';
+      btn.style.lineHeight = '1.2';
+    }
   }
 
 
@@ -3656,7 +3841,6 @@
     const NOW = Date.now();
     const windowHours = Number(analyzeWindowHours) || 24;
     const WINDOW_MS = windowHours * 60 * 60 * 1000;
-    const windowMin = windowHours * 60;
 
     for (const [, user] of Object.entries(metrics?.users || {})) {
       for (const [pid, p] of Object.entries(user?.posts || {})) {
@@ -3677,7 +3861,7 @@
         const irVal = isFinite(uv) && uv > 0 ? (((Number(likes) || 0) + (Number(comments) || 0)) / uv) * 100 : null;
 
         const ageMin = Math.max(0, Math.floor((NOW - tPost) / 60000));
-        const expiringMin = Math.max(0, windowMin - ageMin);
+        const expiringMin = Math.max(0, ANALYZE_EXPIRES_WINDOW_MIN - ageMin);
 
         const caption =
           typeof p?.caption === 'string' && p.caption ? p.caption : typeof p?.text === 'string' && p.text ? p.text : '';
@@ -3741,6 +3925,7 @@
           rrPctVal: rrVal == null ? -1 : rrVal,
           irPctStr,
           irPctVal: irVal == null ? -1 : irVal,
+          ageMin,
           expiringMin,
           caption,
           cameo_usernames: Array.isArray(p?.cameo_usernames) ? p.cameo_usernames : null,
@@ -3757,8 +3942,12 @@
     const windowMin = windowHours * 60;
     for (const [id, likes] of idToLikes.entries()) {
       const meta = idToMeta.get(id);
-      const ageMin = meta?.ageMin;
-      if (!Number.isFinite(ageMin) || ageMin > windowMin) continue;
+      const createdAtMs = Number(meta?.createdAtMs);
+      const ageFromCreatedAt = Number.isFinite(createdAtMs) && createdAtMs > 0
+        ? (Date.now() - createdAtMs) / 60000
+        : NaN;
+      const ageMin = Number.isFinite(ageFromCreatedAt) ? ageFromCreatedAt : Number(meta?.ageMin);
+      if (!Number.isFinite(ageMin) || ageMin < 0 || ageMin > windowMin) continue;
       if (!Number.isFinite(likes) || likes < 15) continue;
 
       const uv = Number(idToUnique.get(id) ?? 0);
@@ -3772,7 +3961,8 @@
       const irVal = uv > 0 ? (((Number(likes) || 0) + (Number(comments) || 0)) / uv) * 100 : null;
       const irPctStr = irVal == null ? '' : irVal === 0 ? '0%' : irVal.toFixed(1).replace(/\.0$/, '') + '%';
 
-      const expiringMin = Math.max(0, windowMin - Math.floor(ageMin));
+      const ageMinInt = Math.floor(ageMin);
+      const expiringMin = Math.max(0, ANALYZE_EXPIRES_WINDOW_MIN - ageMinInt);
 
       const duration = idToDuration.get(id);
       const durationStr = duration ? formatDuration(duration) : null;
@@ -3790,6 +3980,7 @@
         rrPctVal,
         irPctStr,
         irPctVal: irVal == null ? -1 : irVal,
+        ageMin: ageMinInt,
         expiringMin,
         caption: '', // live map path doesn't retain caption reliably
         cameo_usernames: null, // live maps don't retain cameo_usernames reliably
@@ -4266,9 +4457,8 @@ async function renderAnalyzeTable(force = false) {
     }
 
     const windowMin = (Number(analyzeWindowHours) || 24) * 60;
-    // Filter rows: expiringMin represents minutes until the post expires from the window
-    // A post with expiringMin >= 0 is still within the window
-    rows = rows.filter((r) => Number.isFinite(r.expiringMin) && r.expiringMin >= 0);
+    // Filter rows by selected Analyze window (1h..24h) using post age.
+    rows = rows.filter((r) => Number.isFinite(r.ageMin) && r.ageMin >= 0 && r.ageMin <= windowMin);
     
     // Filter by cameo username if selected
     if (analyzeCameoFilterUsername) {
@@ -4465,7 +4655,7 @@ async function renderAnalyzeTable(force = false) {
       const tdComments = mkTdNum(r.comments);
       const tdRR = mkTdNum(r.rrPctStr || '—');
       const tdIR = mkTdNum(r.irPctStr || '—');
-      const expStr = typeof r.expiringMin === 'number' ? (r.expiringMin <= 0 ? '0m' : fmtAgeMin(r.expiringMin)) : '—';
+      const expStr = fmtHoursMinutesRemaining(r.expiringMin);
       const tdExp = mkTdNum(expStr);
 
       tr.appendChild(tdPrompt);
@@ -6850,9 +7040,15 @@ async function renderAnalyzeTable(force = false) {
   function updateControlsVisibility() {
     const bar = ensureControlBar();
     if (!bar) return;
+    const alignBarRight = () => {
+      bar.style.left = 'auto';
+      bar.style.transform = 'none';
+      bar.style.right = '12px';
+    };
 
     // Show control bar on drafts page for bookmarks feature, hide on other filter-hidden pages
     if (isFilterHiddenPage() && !isDrafts()) {
+      syncActivityButtonDocking(bar, false);
       bar.style.display = 'none';
       return;
     } else bar.style.display = 'flex';
@@ -6879,9 +7075,8 @@ async function renderAnalyzeTable(force = false) {
       } else {
         bar.style.top = '12px';
       }
-      bar.style.right = '12px';
-      bar.style.left = 'auto';
-      bar.style.transform = 'none';
+      alignBarRight();
+      syncActivityButtonDocking(bar, true);
 
       return; // nothing else to manage while analyzing
     }
@@ -6914,6 +7109,7 @@ async function renderAnalyzeTable(force = false) {
       bar.style.left = '50%';
       bar.style.right = 'auto';
       bar.style.transform = 'translateX(-50%)';
+      syncActivityButtonDocking(bar, false);
     } else if (isProfile() || isTopFeed()) {
       // Show Gather on Profile pages or Top feed
       if (gatherBtn) gatherBtn.style.display = 'flex';
@@ -6928,9 +7124,8 @@ async function renderAnalyzeTable(force = false) {
       } else {
         bar.style.top = '12px';
       }
-      bar.style.right = '12px';
-      bar.style.left = 'auto';
-      bar.style.transform = 'none';
+      alignBarRight();
+      syncActivityButtonDocking(bar, true);
     } else {
       // On other explore feeds (feed=following, feed=latest, or no feed param) or other pages, hide Gather
       if (gatherBtn) gatherBtn.style.display = 'none';
@@ -6951,9 +7146,8 @@ async function renderAnalyzeTable(force = false) {
       } else {
         bar.style.top = '12px';
       }
-      bar.style.right = '12px';
-      bar.style.left = 'auto';
-      bar.style.transform = 'none';
+      alignBarRight();
+      syncActivityButtonDocking(bar, true);
     }
 
     // Analyze button on all feeds except Drafts
