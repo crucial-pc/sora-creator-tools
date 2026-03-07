@@ -213,6 +213,21 @@
     };
   }
 
+  const FIRST_FRAME_UPLOAD_USE_CASE = 'inpaint_safe';
+
+  function buildFirstFrameInpaintItems(fileId) {
+    const id = typeof fileId === 'string' ? fileId.trim() : '';
+    if (!id) return [];
+    return [
+      {
+        kind: 'file',
+        file_id: id,
+        frames: null,
+        entity: null,
+      },
+    ];
+  }
+
   function extractPublishedPost(payload) {
     if (!payload || typeof payload !== 'object') return null;
     const candidates = [
@@ -3991,6 +4006,7 @@
     if (!capturedAuthToken) throw new Error('Not authenticated');
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('use_case', FIRST_FRAME_UPLOAD_USE_CASE);
     const res = await fetch('https://sora.chatgpt.com/backend/project_y/file/upload', {
       method: 'POST',
       headers: { 'Authorization': capturedAuthToken },
@@ -4191,7 +4207,7 @@
         }
       }
       if (firstFrameFileId) {
-        body.inpaint_items = [{ kind: 'file', file_id: firstFrameFileId }];
+        body.inpaint_items = buildFirstFrameInpaintItems(firstFrameFileId);
       }
 
       // Get sentinel token
@@ -7307,6 +7323,8 @@
       planDraftGridRows,
       extendDraftRenderEndToRowBoundary,
       extendLandscapeRunRenderEnd,
+      FIRST_FRAME_UPLOAD_USE_CASE,
+      buildFirstFrameInpaintItems,
       isGenerationDraftId,
       resolvePendingPollState,
       buildPendingCompletionHandoffPlan,

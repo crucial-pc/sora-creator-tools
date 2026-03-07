@@ -7,6 +7,8 @@ const {
   getComposerModelFamily,
   resolveComposerModelValue,
   buildPublicPostPayload,
+  FIRST_FRAME_UPLOAD_USE_CASE,
+  buildFirstFrameInpaintItems,
   extractPublishedPost,
   resolveDraftPostData,
   applyPublishedPostToDraftData,
@@ -74,6 +76,19 @@ test('buildPublicPostPayload uses the documented share payload shape', () => {
     ],
     destinations: [{ type: 'public' }],
   });
+});
+
+test('first frame uploads use the project_y inpaint_safe flow and file inpaint items', () => {
+  assert.equal(FIRST_FRAME_UPLOAD_USE_CASE, 'inpaint_safe');
+  assert.deepEqual(buildFirstFrameInpaintItems(' file_123 '), [
+    {
+      kind: 'file',
+      file_id: 'file_123',
+      frames: null,
+      entity: null,
+    },
+  ]);
+  assert.deepEqual(buildFirstFrameInpaintItems(''), []);
 });
 
 test('extractPublishedPost accepts nested post responses', () => {
