@@ -609,6 +609,88 @@
     return fallback;
   }
 
+  function parseComposerGensInputValue(value) {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function extractPersistedGensCountValue(rawStorageValue) {
+    if (rawStorageValue == null) return null;
+    try {
+      const parsed = JSON.parse(rawStorageValue);
+      const value = parsed && typeof parsed === 'object' ? parsed.count : parsed;
+      return parseComposerGensInputValue(value);
+    } catch {
+      return parseComposerGensInputValue(rawStorageValue);
+    }
+  }
+
+  function extractPersistedComposerPromptValue(rawStorageValue) {
+    if (rawStorageValue == null) return null;
+    try {
+      const parsed = JSON.parse(rawStorageValue);
+      if (typeof parsed === 'string') return parsed;
+      if (parsed && typeof parsed === 'object' && typeof parsed.prompt === 'string') return parsed.prompt;
+      return null;
+    } catch {
+      return typeof rawStorageValue === 'string' ? rawStorageValue : null;
+    }
+  }
+
+  function resolvePreferredComposerGensCountValue(
+    rawComposerGensCount,
+    storedGensCount = null,
+    preferStoredGensCount = true
+  ) {
+    const parsedRawComposerGensCount = parseComposerGensInputValue(rawComposerGensCount);
+    const parsedStoredGensCount = parseComposerGensInputValue(storedGensCount);
+    if (preferStoredGensCount && parsedStoredGensCount != null) return parsedStoredGensCount;
+    if (parsedRawComposerGensCount != null) return parsedRawComposerGensCount;
+    return parsedStoredGensCount;
+  }
+
+  function resolvePreferredComposerPromptValue(
+    rawComposerPrompt,
+    storedPrompt = null,
+    preferStoredPrompt = true
+  ) {
+    const parsedRawComposerPrompt = typeof rawComposerPrompt === 'string' ? rawComposerPrompt : null;
+    const parsedStoredPrompt = typeof storedPrompt === 'string' ? storedPrompt : null;
+    if (preferStoredPrompt && parsedStoredPrompt != null) return parsedStoredPrompt;
+    if (parsedRawComposerPrompt != null) return parsedRawComposerPrompt;
+    return parsedStoredPrompt;
+  }
+
+  function getDraftWorkspaceBadgeLabel(draft, currentWorkspaceFilter = null, resolveWorkspaceName = null) {
+    const normalizedWorkspaceFilter = typeof currentWorkspaceFilter === 'string'
+      ? currentWorkspaceFilter.trim()
+      : '';
+    if (normalizedWorkspaceFilter) return '';
+    const workspaceId = typeof draft?.workspace_id === 'string'
+      ? draft.workspace_id.trim()
+      : '';
+    if (!workspaceId) return '';
+    if (typeof resolveWorkspaceName !== 'function') return '';
+    const workspaceName = String(resolveWorkspaceName(workspaceId) || '').trim();
+    return workspaceName;
+  }
+
+  function getUVDraftsPageTitle(currentWorkspaceFilter = null, resolveWorkspaceName = null) {
+    const normalizedWorkspaceFilter = typeof currentWorkspaceFilter === 'string'
+      ? currentWorkspaceFilter.trim()
+      : '';
+    if (!normalizedWorkspaceFilter || typeof resolveWorkspaceName !== 'function') {
+      return 'My Drafts';
+    }
+    const workspaceName = String(resolveWorkspaceName(normalizedWorkspaceFilter) || '').trim();
+    return workspaceName || 'My Drafts';
+  }
+
   function createSoraUVDraftsPageModule(deps = {}) {
     let capturedAuthToken = null;
     let modelOverride = null;
@@ -616,6 +698,8 @@
     const SORA_DEFAULT_FPS = Number(deps.defaultFps) > 0 ? Number(deps.defaultFps) : 30;
     const BOOKMARKS_KEY = 'SORA_UV_BOOKMARKS_V1';
     const GENS_COUNT_KEY = 'SCT_GENS_COUNT_V1';
+    const UV_DRAFTS_GENS_COUNT_KEY = 'SORA_UV_DRAFTS_GENS_COUNT_V1';
+    const UV_DRAFTS_COMPOSER_PROMPT_KEY = 'SORA_UV_DRAFTS_PROMPT_V1';
     const ULTRA_MODE_KEY = 'SCT_ULTRA_MODE_V1';
     const GENS_COUNT_MIN = 1;
     const GENS_COUNT_MAX_DEFAULT = 10;
@@ -745,23 +829,45 @@
       return Math.min(getGensCountMax(), Math.max(GENS_COUNT_MIN, Math.round(n)));
     }
 
-    function loadStoredGensCount() {
+    function loadStoredGensCountValue() {
       try {
-        const raw = localStorage.getItem(GENS_COUNT_KEY);
-        if (!raw) return GENS_COUNT_MIN;
-        const parsed = JSON.parse(raw);
-        const count = parsed && typeof parsed === 'object' ? parsed.count : raw;
-        return clampGensCount(count);
+        const rawLocalDraftsCount = localStorage.getItem(UV_DRAFTS_GENS_COUNT_KEY);
+        const rawSharedCount = localStorage.getItem(GENS_COUNT_KEY);
+        const parsedCount = extractPersistedGensCountValue(rawLocalDraftsCount ?? rawSharedCount);
+        return parsedCount == null ? null : clampGensCount(parsedCount);
       } catch {
-        return GENS_COUNT_MIN;
+        return null;
       }
     }
 
+    function loadStoredGensCount() {
+      return loadStoredGensCountValue() ?? GENS_COUNT_MIN;
+    }
+
     function persistComposerGensCount(count) {
+      const nextValue = JSON.stringify({ count: clampGensCount(count), setAt: Date.now() });
+      try {
+        localStorage.setItem(UV_DRAFTS_GENS_COUNT_KEY, nextValue);
+      } catch {}
+      try {
+        localStorage.setItem(GENS_COUNT_KEY, nextValue);
+      } catch {}
+    }
+
+    function loadStoredComposerPromptValue() {
+      try {
+        return extractPersistedComposerPromptValue(localStorage.getItem(UV_DRAFTS_COMPOSER_PROMPT_KEY));
+      } catch {
+        return null;
+      }
+    }
+
+    function persistComposerPrompt(prompt) {
+      const nextPrompt = typeof prompt === 'string' ? prompt : '';
       try {
         localStorage.setItem(
-          GENS_COUNT_KEY,
-          JSON.stringify({ count: clampGensCount(count), setAt: Date.now() })
+          UV_DRAFTS_COMPOSER_PROMPT_KEY,
+          JSON.stringify({ prompt: nextPrompt, setAt: Date.now() })
         );
       } catch {}
     }
@@ -1570,6 +1676,7 @@
 
   // == UV Drafts Page State ==
   let uvDraftsPageEl = null;
+  let uvDraftsTitleEl = null;
   let uvDraftsGridEl = null;
   let uvDraftsFilterBarEl = null;
   let uvDraftsLoadingEl = null;
@@ -1966,7 +2073,7 @@
 
   function defaultUVDraftsComposerState() {
     return {
-      prompt: '',
+      prompt: loadStoredComposerPromptValue() ?? '',
       model: getDefaultComposerModel(),
       durationSeconds: 10,
       gensCount: loadStoredGensCount(),
@@ -1987,18 +2094,30 @@
     return best;
   }
 
-  function normalizeUVDraftsComposerState(raw) {
+  function normalizeUVDraftsComposerState(raw, options = {}) {
     const out = defaultUVDraftsComposerState();
+    const storedGensCount = Object.prototype.hasOwnProperty.call(options, 'storedGensCount')
+      ? options.storedGensCount
+      : loadStoredGensCountValue();
+    const preferStoredGensCount = options.preferStoredGensCount === true;
+    const storedPrompt = Object.prototype.hasOwnProperty.call(options, 'storedPrompt')
+      ? options.storedPrompt
+      : loadStoredComposerPromptValue();
+    const preferStoredPrompt = options.preferStoredPrompt === true;
     if (!raw || typeof raw !== 'object') return out;
-    if (typeof raw.prompt === 'string') out.prompt = raw.prompt;
+    const preferredPrompt = resolvePreferredComposerPromptValue(raw.prompt, storedPrompt, preferStoredPrompt);
+    if (typeof preferredPrompt === 'string') out.prompt = preferredPrompt;
     if (typeof raw.model === 'string') out.model = normalizeComposerModel(raw.model) || out.model;
     if (typeof raw.durationSeconds === 'number' && Number.isFinite(raw.durationSeconds) && raw.durationSeconds > 0) {
       out.durationSeconds = snapToValidDuration(raw.durationSeconds);
     }
-    if (typeof raw.gensCount === 'number' && Number.isFinite(raw.gensCount)) {
-      out.gensCount = clampGensCount(raw.gensCount);
-    } else if (typeof raw.gensCount === 'string' && raw.gensCount.trim()) {
-      out.gensCount = clampGensCount(raw.gensCount);
+    const preferredGensCount = resolvePreferredComposerGensCountValue(
+      raw.gensCount,
+      storedGensCount,
+      preferStoredGensCount
+    );
+    if (preferredGensCount != null) {
+      out.gensCount = clampGensCount(preferredGensCount);
     }
     if (raw.orientation === 'portrait' || raw.orientation === 'landscape') {
       out.orientation = raw.orientation;
@@ -2012,7 +2131,10 @@
     if (uvDraftsComposerState) return uvDraftsComposerState;
     try {
       const raw = JSON.parse(localStorage.getItem(UV_DRAFTS_COMPOSER_KEY) || '{}');
-      uvDraftsComposerState = normalizeUVDraftsComposerState(raw);
+      uvDraftsComposerState = normalizeUVDraftsComposerState(raw, {
+        preferStoredGensCount: true,
+        preferStoredPrompt: true,
+      });
     } catch {
       uvDraftsComposerState = defaultUVDraftsComposerState();
     }
@@ -2025,6 +2147,8 @@
     try {
       localStorage.setItem(UV_DRAFTS_COMPOSER_KEY, JSON.stringify(uvDraftsComposerState || defaultUVDraftsComposerState()));
     } catch {}
+    persistComposerPrompt(uvDraftsComposerState?.prompt || '');
+    persistComposerGensCount(uvDraftsComposerState?.gensCount);
   }
 
   function loadPendingCreateOverrides() {
@@ -2386,17 +2510,43 @@
     updateUVDraftsStats();
   }
 
-  async function addDraftToWorkspace(draftId, workspaceId) {
-    const draft = await uvDBGet(UV_DRAFTS_STORES.drafts, draftId);
+  async function addDraftToWorkspace(draftId, workspaceId, options = {}) {
+    const normalizedDraftId = typeof draftId === 'string' ? draftId.trim() : '';
+    const normalizedWorkspaceId = workspaceId ? String(workspaceId).trim() : null;
+    const normalizedTaskId = typeof options?.taskId === 'string' ? options.taskId.trim() : '';
+
+    const draft = normalizedDraftId ? await uvDBGet(UV_DRAFTS_STORES.drafts, normalizedDraftId) : null;
     if (draft) {
-      draft.workspace_id = workspaceId;
+      draft.workspace_id = normalizedWorkspaceId;
       await uvDBPut(UV_DRAFTS_STORES.drafts, draft);
     }
 
-    // Update local data
-    const localDraft = uvDraftsData.find(d => d.id === draftId);
-    if (localDraft) {
-      localDraft.workspace_id = workspaceId;
+    const updateDraftCollection = (drafts) => {
+      const matchedTaskIds = new Set();
+      if (!Array.isArray(drafts)) return matchedTaskIds;
+      for (const item of drafts) {
+        const itemId = typeof item?.id === 'string' ? item.id.trim() : '';
+        const itemTaskId = typeof item?.task_id === 'string' ? item.task_id.trim() : '';
+        if ((normalizedDraftId && itemId === normalizedDraftId) || (normalizedTaskId && itemTaskId === normalizedTaskId)) {
+          item.workspace_id = normalizedWorkspaceId;
+          if (itemTaskId) matchedTaskIds.add(itemTaskId);
+        }
+      }
+      return matchedTaskIds;
+    };
+
+    const matchedTaskIds = new Set([
+      ...updateDraftCollection(uvDraftsData),
+      ...updateDraftCollection(uvDraftsPendingData),
+    ]);
+    if (normalizedTaskId) matchedTaskIds.add(normalizedTaskId);
+
+    for (const taskId of matchedTaskIds) {
+      if (normalizedWorkspaceId) {
+        uvDraftsPendingWorkspaceTags.set(taskId, normalizedWorkspaceId);
+      } else {
+        uvDraftsPendingWorkspaceTags.delete(taskId);
+      }
     }
   }
 
@@ -2430,6 +2580,12 @@
         persistUVDraftsViewState();
       }
     }
+    updateUVDraftsHeaderTitle();
+  }
+
+  function updateUVDraftsHeaderTitle() {
+    if (!uvDraftsTitleEl) return;
+    uvDraftsTitleEl.textContent = getUVDraftsPageTitle(uvDraftsWorkspaceFilter, getWorkspaceNameById);
   }
 
   function closeDraftWorkspacePicker() {
@@ -2603,7 +2759,7 @@
         saveBtn.disabled = true;
         const nextWorkspaceId = selectedWorkspaceId || null;
         if (String(draft.workspace_id || '') !== String(nextWorkspaceId || '')) {
-          await addDraftToWorkspace(draft.id, nextWorkspaceId);
+          await addDraftToWorkspace(draft.id, nextWorkspaceId, { taskId: draft.task_id });
           renderUVDraftsGrid();
           updateUVDraftsStats();
         }
@@ -3822,20 +3978,22 @@
       sizeEl.disabled = !allowLarge;
     };
 
-    const syncStateFromFields = () => {
+    const syncStateFromFields = (options = {}) => {
+      const commitGensValue = options.commitGensValue !== false;
       syncComposerSizeField();
+      const parsedGensCount = parseComposerGensInputValue(gensEl?.value);
       uvDraftsComposerState = normalizeUVDraftsComposerState({
         prompt: promptEl.value,
         model: modelEl.value,
         durationSeconds: Number(durationEl.value),
-        gensCount: clampGensCount(gensEl?.value),
+        gensCount: parsedGensCount == null ? uvDraftsComposerState?.gensCount : parsedGensCount,
         orientation: orientationEl.value,
         size: sizeEl.value,
         style_id: styleEl.value,
       });
       persistUVDraftsComposerState();
       persistComposerGensCount(uvDraftsComposerState.gensCount);
-      if (gensEl) gensEl.value = String(uvDraftsComposerState.gensCount);
+      if (gensEl && commitGensValue) gensEl.value = String(uvDraftsComposerState.gensCount);
       if (sizeEl) sizeEl.value = uvDraftsComposerState.size;
     };
 
@@ -3855,10 +4013,15 @@
     persistUVDraftsComposerState();
     persistComposerGensCount(uvDraftsComposerState.gensCount);
 
-    [promptEl, modelEl, durationEl, gensEl, orientationEl, sizeEl, styleEl].filter(Boolean).forEach((el) => {
+    [promptEl, modelEl, durationEl, orientationEl, sizeEl, styleEl].filter(Boolean).forEach((el) => {
       el.addEventListener('input', syncStateFromFields);
       el.addEventListener('change', syncStateFromFields);
     });
+    if (gensEl) {
+      gensEl.addEventListener('input', () => syncStateFromFields({ commitGensValue: false }));
+      gensEl.addEventListener('change', () => syncStateFromFields({ commitGensValue: true }));
+      gensEl.addEventListener('blur', () => syncStateFromFields({ commitGensValue: true }));
+    }
     window.addEventListener('sct_ultra_mode', () => {
       syncGensFieldLimits();
       syncStateFromFields();
@@ -3870,9 +4033,18 @@
       }
     });
 
-    composer.querySelector('[data-uvd-compose-create="1"]')?.addEventListener('click', () => startComposerFlow('compose', statusEl));
-    composer.querySelector('[data-uvd-compose-remix="1"]')?.addEventListener('click', () => startComposerFlow('remix', statusEl));
-    composer.querySelector('[data-uvd-compose-extend="1"]')?.addEventListener('click', () => startComposerFlow('extend', statusEl));
+    composer.querySelector('[data-uvd-compose-create="1"]')?.addEventListener('click', () => {
+      syncStateFromFields({ commitGensValue: true });
+      startComposerFlow('compose', statusEl);
+    });
+    composer.querySelector('[data-uvd-compose-remix="1"]')?.addEventListener('click', () => {
+      syncStateFromFields({ commitGensValue: true });
+      startComposerFlow('remix', statusEl);
+    });
+    composer.querySelector('[data-uvd-compose-extend="1"]')?.addEventListener('click', () => {
+      syncStateFromFields({ commitGensValue: true });
+      startComposerFlow('extend', statusEl);
+    });
     clearSourceBtn?.addEventListener('click', () => setComposerSource(null, statusEl));
 
     // Cameo add button
@@ -4596,7 +4768,7 @@
 
       if (isPendingDraft) {
         const helpText = document.createElement('div');
-        helpText.textContent = 'This draft is still in progress. It will move into drafts when complete.';
+        helpText.textContent = 'This draft is still in progress.';
         Object.assign(helpText.style, {
           color: '#9eb8ff',
           fontSize: '10px',
@@ -4744,14 +4916,76 @@
     }
 
     // NEW badge
+    const workspaceBadgeLabel = getDraftWorkspaceBadgeLabel(draft, uvDraftsWorkspaceFilter, getWorkspaceNameById);
+    let topLeftBadges = null;
+    let topRightBadges = null;
+    const ensureTopLeftBadges = () => {
+      if (topLeftBadges) return topLeftBadges;
+      topLeftBadges = document.createElement('div');
+      topLeftBadges.className = 'uvd-card-badges-top-left';
+      Object.assign(topLeftBadges.style, {
+        position: 'absolute',
+        top: '8px',
+        left: '8px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: '6px',
+        zIndex: '3',
+        pointerEvents: 'none',
+        maxWidth: 'calc(100% - 16px)',
+      });
+      thumbContainer.appendChild(topLeftBadges);
+      return topLeftBadges;
+    };
+
+    const ensureTopRightBadges = () => {
+      if (topRightBadges) return topRightBadges;
+      topRightBadges = document.createElement('div');
+      topRightBadges.className = 'uvd-card-badges-top-right';
+      Object.assign(topRightBadges.style, {
+        position: 'absolute',
+        top: '8px',
+        right: '8px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
+        gap: '6px',
+        zIndex: '3',
+        pointerEvents: 'none',
+        maxWidth: 'calc(100% - 16px)',
+      });
+      thumbContainer.appendChild(topRightBadges);
+      return topRightBadges;
+    };
+
+    if (workspaceBadgeLabel) {
+      const workspaceBadge = document.createElement('div');
+      workspaceBadge.className = 'uvd-workspace-badge';
+      workspaceBadge.textContent = workspaceBadgeLabel;
+      Object.assign(workspaceBadge.style, {
+        maxWidth: '180px',
+        background: 'rgba(8,12,18,0.82)',
+        border: '1px solid rgba(255,255,255,0.16)',
+        color: '#f4f7fb',
+        fontSize: '10px',
+        fontWeight: '700',
+        padding: '4px 8px',
+        borderRadius: '999px',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        boxShadow: '0 6px 18px rgba(0,0,0,0.24)',
+        backdropFilter: 'blur(8px)',
+      });
+      ensureTopRightBadges().appendChild(workspaceBadge);
+    }
+
     if (isNew) {
       const newBadge = document.createElement('div');
       newBadge.className = 'uv-new-badge';
       newBadge.textContent = 'NEW';
       Object.assign(newBadge.style, {
-        position: 'absolute',
-        top: '8px',
-        left: '8px',
         background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
         color: '#fff',
         fontSize: '10px',
@@ -4762,7 +4996,7 @@
         letterSpacing: '0.5px',
         boxShadow: '0 2px 8px rgba(59,130,246,0.5)',
       });
-      thumbContainer.appendChild(newBadge);
+      ensureTopLeftBadges().appendChild(newBadge);
     }
 
     let bookmarkIndicator = null;
@@ -5006,7 +5240,6 @@
     const workspaceBtn = createActionBtn(icons.folder, 'Workspace', () => {
       showDraftWorkspacePicker(draft);
     });
-    workspaceBtn.disabled = isPendingDraft;
     actionsRow.appendChild(workspaceBtn);
 
     // Delete button
@@ -5058,7 +5291,7 @@
         return;
       }
       if (isPendingDraft) {
-        scheduleBtn.textContent = 'Pending...';
+        scheduleBtn.textContent = 'Schedule';
         scheduleBtn.disabled = true;
         delete scheduleBtn.dataset.tone;
         return;
@@ -5086,7 +5319,6 @@
       postBtn.disabled = true;
       postBtn.dataset.tone = 'success';
     } else if (isPendingDraft) {
-      postBtn.textContent = 'Pending...';
       postBtn.disabled = true;
     } else if (hasBlockedDraftActions) {
       postBtn.disabled = true;
@@ -5889,6 +6121,7 @@
     if (uvDraftsPageEl && document.contains(uvDraftsPageEl)) {
       uvDraftsPageEl.style.display = 'block';
       ensureUVDraftsResponsiveLayoutWatchers();
+      updateUVDraftsHeaderTitle();
       startPendingDraftsPolling();
       if (uvDraftsComposerEl) {
         const statusEl = uvDraftsComposerEl.querySelector('[data-uvd-compose-status="1"]');
@@ -6122,8 +6355,9 @@
     titleSection.className = 'uvd-title-wrap';
 
     const title = document.createElement('h1');
-    title.textContent = 'My Drafts';
+    title.textContent = getUVDraftsPageTitle(uvDraftsWorkspaceFilter, getWorkspaceNameById);
     titleSection.appendChild(title);
+    uvDraftsTitleEl = title;
 
     const stats = document.createElement('div');
     stats.className = 'uv-drafts-stats';
@@ -6249,6 +6483,7 @@
       uvDraftsFilterState = filterSelect.value;
       uvDraftsJustSeenIds.clear(); // Clear just-seen on filter change
       persistUVDraftsViewState();
+      updateUVDraftsHeaderTitle();
       renderUVDraftsGrid();
     });
     filterBar.appendChild(filterSelect);
@@ -6265,13 +6500,17 @@
       }
       uvDraftsWorkspaceFilter = workspaceSelect.value || null;
       persistUVDraftsViewState();
+      updateUVDraftsHeaderTitle();
       renderUVDraftsGrid();
     });
     uvWorkspaceSelectEl = workspaceSelect;
     filterBar.appendChild(workspaceSelect);
 
     // Load workspaces async
-    loadWorkspaces().then(() => updateWorkspaceSelect());
+    loadWorkspaces().then(() => {
+      updateWorkspaceSelect();
+      updateUVDraftsHeaderTitle();
+    });
 
     // "Remove All Unsynced" button — only visible when unsynced filter is active
     const removeUnsyncedBtn = document.createElement('button');
@@ -6430,6 +6669,13 @@
       buildComposerSourceFromPublishedPost,
       isLargeComposerSizeAllowed,
       normalizeComposerSizeForModel,
+      parseComposerGensInputValue,
+      extractPersistedGensCountValue,
+      resolvePreferredComposerGensCountValue,
+      extractPersistedComposerPromptValue,
+      resolvePreferredComposerPromptValue,
+      getDraftWorkspaceBadgeLabel,
+      getUVDraftsPageTitle,
       normalizeDraftOrientationValue,
       extractDraftDimensions,
       resolveDraftOrientationValue,

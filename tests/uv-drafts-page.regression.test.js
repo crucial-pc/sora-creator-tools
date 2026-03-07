@@ -14,6 +14,13 @@ const {
   buildComposerSourceFromPublishedPost,
   isLargeComposerSizeAllowed,
   normalizeComposerSizeForModel,
+  parseComposerGensInputValue,
+  extractPersistedGensCountValue,
+  resolvePreferredComposerGensCountValue,
+  extractPersistedComposerPromptValue,
+  resolvePreferredComposerPromptValue,
+  getDraftWorkspaceBadgeLabel,
+  getUVDraftsPageTitle,
   normalizeDraftOrientationValue,
   extractDraftDimensions,
   resolveDraftOrientationValue,
@@ -172,6 +179,63 @@ test('large size is restricted to Sora 2 Pro unless ultra mode is enabled', () =
   assert.equal(normalizeComposerSizeForModel('large', 'sy_ore', false), 'large');
   assert.equal(normalizeComposerSizeForModel('large', 'sy_8', false), 'small');
   assert.equal(normalizeComposerSizeForModel('large', 'sy_8', true), 'large');
+});
+
+test('gens input parser allows empty editing states without forcing a value', () => {
+  assert.equal(parseComposerGensInputValue(''), null);
+  assert.equal(parseComposerGensInputValue('   '), null);
+  assert.equal(parseComposerGensInputValue('4'), 4);
+  assert.equal(parseComposerGensInputValue(7), 7);
+  assert.equal(parseComposerGensInputValue('abc'), null);
+});
+
+test('stored gens value wins on load, but live composer edits still take effect', () => {
+  assert.equal(extractPersistedGensCountValue(null), null);
+  assert.equal(extractPersistedGensCountValue('{"count":4,"setAt":123}'), 4);
+  assert.equal(extractPersistedGensCountValue('7'), 7);
+  assert.equal(resolvePreferredComposerGensCountValue(1, 4, true), 4);
+  assert.equal(resolvePreferredComposerGensCountValue(4, 1, false), 4);
+  assert.equal(resolvePreferredComposerGensCountValue(null, 4, false), 4);
+  assert.equal(resolvePreferredComposerGensCountValue('3', null, false), 3);
+});
+
+test('stored prompt value wins on load, but live prompt edits still take effect', () => {
+  assert.equal(extractPersistedComposerPromptValue(null), null);
+  assert.equal(extractPersistedComposerPromptValue('{"prompt":"Saved prompt","setAt":123}'), 'Saved prompt');
+  assert.equal(extractPersistedComposerPromptValue('"String prompt"'), 'String prompt');
+  assert.equal(resolvePreferredComposerPromptValue('Stale prompt', 'Saved prompt', true), 'Saved prompt');
+  assert.equal(resolvePreferredComposerPromptValue('Typed prompt', 'Saved prompt', false), 'Typed prompt');
+  assert.equal(resolvePreferredComposerPromptValue(null, 'Saved prompt', false), 'Saved prompt');
+});
+
+test('workspace badge label only shows in all-workspaces view when the workspace name is known', () => {
+  const resolveWorkspaceName = (id) => ({ ws_music: 'Music Lab' }[id] || '');
+
+  assert.equal(
+    getDraftWorkspaceBadgeLabel({ workspace_id: 'ws_music' }, null, resolveWorkspaceName),
+    'Music Lab'
+  );
+  assert.equal(
+    getDraftWorkspaceBadgeLabel({ workspace_id: 'ws_music' }, '', resolveWorkspaceName),
+    'Music Lab'
+  );
+  assert.equal(
+    getDraftWorkspaceBadgeLabel({ workspace_id: 'ws_music' }, 'ws_music', resolveWorkspaceName),
+    ''
+  );
+  assert.equal(
+    getDraftWorkspaceBadgeLabel({ workspace_id: 'ws_unknown' }, null, resolveWorkspaceName),
+    ''
+  );
+});
+
+test('drafts page title uses the current workspace name when filtered to a workspace', () => {
+  const resolveWorkspaceName = (id) => ({ ws_music: 'Music Lab' }[id] || '');
+
+  assert.equal(getUVDraftsPageTitle(null, resolveWorkspaceName), 'My Drafts');
+  assert.equal(getUVDraftsPageTitle('', resolveWorkspaceName), 'My Drafts');
+  assert.equal(getUVDraftsPageTitle('ws_music', resolveWorkspaceName), 'Music Lab');
+  assert.equal(getUVDraftsPageTitle('ws_unknown', resolveWorkspaceName), 'My Drafts');
 });
 
 test('landscape cards group only inside consecutive landscape runs', () => {
