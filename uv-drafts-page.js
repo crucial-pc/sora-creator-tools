@@ -5382,7 +5382,7 @@
     // NEW badge
     const workspaceBadgeLabel = getDraftWorkspaceBadgeLabel(draft, uvDraftsWorkspaceFilter, getWorkspaceNameById);
     let topLeftBadges = null;
-    let topRightBadges = null;
+    let bottomLeftBadges = null;
     const ensureTopLeftBadges = () => {
       if (topLeftBadges) return topLeftBadges;
       topLeftBadges = document.createElement('div');
@@ -5403,24 +5403,24 @@
       return topLeftBadges;
     };
 
-    const ensureTopRightBadges = () => {
-      if (topRightBadges) return topRightBadges;
-      topRightBadges = document.createElement('div');
-      topRightBadges.className = 'uvd-card-badges-top-right';
-      Object.assign(topRightBadges.style, {
+    const ensureBottomLeftBadges = () => {
+      if (bottomLeftBadges) return bottomLeftBadges;
+      bottomLeftBadges = document.createElement('div');
+      bottomLeftBadges.className = 'uvd-card-badges-bottom-left';
+      Object.assign(bottomLeftBadges.style, {
         position: 'absolute',
-        top: '8px',
-        right: '8px',
+        bottom: '8px',
+        left: '8px',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'flex-end',
+        alignItems: 'flex-start',
         gap: '6px',
         zIndex: '3',
         pointerEvents: 'none',
         maxWidth: 'calc(100% - 16px)',
       });
-      thumbContainer.appendChild(topRightBadges);
-      return topRightBadges;
+      thumbContainer.appendChild(bottomLeftBadges);
+      return bottomLeftBadges;
     };
 
     if (workspaceBadgeLabel) {
@@ -5442,7 +5442,7 @@
         boxShadow: '0 6px 18px rgba(0,0,0,0.24)',
         backdropFilter: 'blur(8px)',
       });
-      ensureTopRightBadges().appendChild(workspaceBadge);
+      ensureTopLeftBadges().appendChild(workspaceBadge);
     }
 
     if (isNew) {
@@ -5460,7 +5460,7 @@
         letterSpacing: '0.5px',
         boxShadow: '0 2px 8px rgba(59,130,246,0.5)',
       });
-      ensureTopLeftBadges().appendChild(newBadge);
+      ensureBottomLeftBadges().appendChild(newBadge);
     }
 
     let bookmarkIndicator = null;
