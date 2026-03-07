@@ -5488,6 +5488,10 @@
     const thumbLink = document.createElement('a');
     thumbLink.className = 'uvd-thumb-link';
     thumbLink.href = hasBlockedDraftActions ? '#' : draftUrl;
+    if (!hasBlockedDraftActions) {
+      thumbLink.target = '_blank';
+      thumbLink.rel = 'noopener';
+    }
     thumbLink.draggable = false; // Prevent drag interfering with video scrubber
     thumbLink.addEventListener('dragstart', (e) => e.preventDefault());
     if (hasBlockedDraftActions) {
@@ -5884,14 +5888,8 @@
       if (Date.now() < suppressCardNavUntil) return;
       if (shouldIgnoreCardNavigationTarget(e.target)) return;
       if (e.button !== 0) return;
-
-      if (e.metaKey || e.ctrlKey) {
-        e.preventDefault();
-        window.open(draftUrl, '_blank', 'noopener');
-        return;
-      }
-
-      window.location.href = draftUrl;
+      e.preventDefault();
+      window.open(draftUrl, '_blank', 'noopener');
     });
 
     card.addEventListener('auxclick', (e) => {
